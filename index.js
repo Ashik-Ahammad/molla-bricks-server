@@ -39,6 +39,33 @@ async function run() {
       }
     }
 
+
+    
+    // ==========================================
+    // 🟢 0.5 AUTO-SYNC SARDARS FROM MILLS TO DIRECTORY
+    // ==========================================
+    // সার্ভার স্টার্ট হলে চেক করবে কোনো সর্দার ডিরেক্টরিতে মিসিং আছে কি না
+    const existingMills = await db.collection("mills").find().toArray();
+    for (const mill of existingMills) {
+      if (mill.sardarName) {
+        const sardarExists = await db.collection("people").findOne({ 
+          role: "sardar", 
+          name: { $regex: new RegExp(`^${mill.sardarName.trim()}$`, "i") } 
+        });
+        
+        if (!sardarExists) {
+          await db.collection("people").insertOne({
+            role: "sardar",
+            name: mill.sardarName.trim(),
+            sardarRole: "Mill Sardar",
+            address: "Auto-synced from Mills",
+            phone: "",
+            created_at: new Date()
+          });
+        }
+      }
+    }
+
     // ==========================================
     // 🟢 1. DIRECTORY (PEOPLE) & LEDGER BALANCE
     // ==========================================
@@ -455,11 +482,29 @@ async function run() {
       } catch (error) { res.status(500).json({ error: "Failed to save kiln action" }); }
     });
 
-    app.delete("/api/production-logs/:id", async (req, res) => {
+    // Update Production & Kiln Logs
+    app.put("/api/production-logs/:id", async (req, res) => {
       try {
-        await db.collection("productionLogs").deleteOne({ _id: new ObjectId(req.params.id) });
-        res.status(200).json({ success: true });
-      } catch (error) { res.status(500).json({ error: "Failed to delete log" }); }
+        const { _id, created_at, ...updateData } = req.body;
+        
+        // Convert strings back to numbers for calculations
+        if (updateData.quantity) updateData.quantity = Number(updateData.quantity);
+        if (updateData.sourceQty) updateData.sourceQty = Number(updateData.sourceQty);
+        if (updateData.destQty) updateData.destQty = Number(updateData.destQty);
+        
+        // Recalculate loss if it's a kiln action
+        if (updateData.sourceQty && updateData.destQty) {
+          updateData.lossQty = Math.max(0, updateData.sourceQty - updateData.destQty);
+        }
+
+        await db.collection("productionLogs").updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { ...updateData, updated_at: new Date() } }
+        );
+        res.status(200).json({ success: true, message: "Log updated successfully" });
+      } catch (error) { 
+        res.status(500).json({ error: "Failed to update log" }); 
+      }
     });
 
     // ==========================================
